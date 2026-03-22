@@ -1910,7 +1910,7 @@
       e.target.reset();
     }
 
-    // ===== チャットボット =====
+    // ===== チャットボット（Claude AI） =====
     const chatFab         = document.getElementById('chatFab');
     const chatWindow      = document.getElementById('chatWindow');
     const chatClose       = document.getElementById('chatClose');
@@ -1918,23 +1918,9 @@
     const chatInput       = document.getElementById('chatInput');
     const chatSuggestions = document.getElementById('chatSuggestions');
 
-    // FAQ データ
-    const faqData = {
-      'どんなサービスがありますか？':
-        '主なサービスは以下の3つです。\n\n📋 税務相談・申告\n法人税・所得税・相続税など各種申告に対応します。\n\n📊 記帳・月次決算\n記帳代行から月次・年次決算書の作成まで行います。\n\n🤖 AI・自動化による業務効率化支援\n経理・バックオフィス業務を棚卸しし、ミス削減と工数削減を実現します。\n\n💬 チャットボット・AIツール導入支援\n現場に定着するツール選定・設計・運用ルールづくりまで支援します。\n\n詳細はページ内の「サービス案内」をご覧ください。',
-
-      '料金・費用はいくらですか？':
-        '料金はお客様の規模・業種・依頼内容によって異なります。\n\n初回相談は無料ですので、まずはお気軽にご相談ください。ご状況をお伺いしたうえで、最適なプランをご提案いたします。\n\n👉 お問い合わせフォームからご予約いただけます。',
-
-      '初回相談は無料ですか？':
-        'はい、初回相談は無料です！\n\n税務・会計に関するご不明点や、サービス内容のご確認など、どんなことでもお気軽にご相談ください。\n\n面談はオンライン・対面どちらでも対応可能です。\n\n👉 ページ下部のお問い合わせフォームからご予約ください。',
-
-      'AI・自動化による業務効率化支援とは？':
-        'AI・自動化による業務効率化支援とは、これまで人の手で行っていた経理・会計業務をデジタルで自動化するサービスです。\n\n主な内容：\n・freee・MFクラウドなどのクラウド会計導入\n・データ入力・転記の自動化\n・請求書・領収書のペーパーレス化\n・業務フロー設計・効率化コンサル\n\n事務コストの削減と、本業への集中を実現します。',
-
-      '面談の予約をしたい':
-        'ご予約ありがとうございます！\n\nページ下部のお問い合わせフォームから、ご希望の日時・相談内容をお送りください。1〜2営業日以内にご連絡いたします。\n\n📞 お電話でのご予約も承っています。\n営業時間：平日 9:00〜17:00'
-    };
+    // Claude APIに送る会話履歴
+    const chatMessages = [];
+    let isSending = false; // 二重送信防止
 
     function toggleChat(open) {
       chatWindow.classList.toggle('open', open);
@@ -1947,6 +1933,7 @@
     chatFab.addEventListener('click',  () => toggleChat(!chatWindow.classList.contains('open')));
     chatClose.addEventListener('click', () => toggleChat(false));
 
+    // ユーザー or ボットのメッセージを追加
     function addMessage(text, isUser) {
       const msg = document.createElement('div');
       msg.className = 'chat-msg ' + (isUser ? 'user' : 'bot');
@@ -1965,6 +1952,25 @@
       chatBody.scrollTop = chatBody.scrollHeight;
     }
 
+    // ストリーミング用：空のボットバブルを作成してbubble要素を返す
+    function addStreamingBotMessage() {
+      const msg = document.createElement('div');
+      msg.className = 'chat-msg bot';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'chat-msg-avatar';
+      avatar.textContent = '🤖';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'chat-bubble';
+
+      msg.appendChild(avatar);
+      msg.appendChild(bubble);
+      chatBody.appendChild(msg);
+      chatBody.scrollTop = chatBody.scrollHeight;
+      return bubble;
+    }
+
     function showTyping() {
       const el = document.createElement('div');
       el.className = 'chat-msg bot';
@@ -1979,37 +1985,98 @@
       if (el) el.remove();
     }
 
-    function botReply(answer) {
+    // Claude API（/api/chat）へSSEストリーミングで送信
+    async function sendToAPI(userText) {
+      if (isSending) return;
+      isSending = true;
+      chatInput.disabled = true;
+
+      chatMessages.push({ role: 'user', content: userText });
       showTyping();
-      setTimeout(() => { hideTyping(); addMessage(answer, false); }, 800);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: chatMessages }),
+        });
+
+        hideTyping();
+
+        if (!res.ok) {
+          addMessage('サーバーとの通信でエラーが発生しました。しばらくしてから再度お試しください。', false);
+          chatMessages.pop();
+          return;
+        }
+
+        const bubble = addStreamingBotMessage();
+        let fullText = '';
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // 最後の不完全な行をバッファに残す
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') break;
+
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.error) {
+                bubble.innerHTML = parsed.error.replace(/\n/g, '<br>');
+                fullText = parsed.error;
+                break;
+              }
+              if (parsed.text) {
+                fullText += parsed.text;
+                bubble.innerHTML = fullText.replace(/\n/g, '<br>');
+                chatBody.scrollTop = chatBody.scrollHeight;
+              }
+            } catch {
+              // JSON解析エラーは無視
+            }
+          }
+        }
+
+        // 完成したAI応答を履歴に追加
+        if (fullText) {
+          chatMessages.push({ role: 'assistant', content: fullText });
+        }
+
+      } catch (err) {
+        hideTyping();
+        addMessage('通信エラーが発生しました。サーバーが起動しているか確認してください。', false);
+        chatMessages.pop();
+      } finally {
+        isSending = false;
+        chatInput.disabled = false;
+        chatInput.focus();
+      }
     }
 
-    function handleSuggestion(btn) {
+    async function handleSuggestion(btn) {
       const text = btn.textContent;
       addMessage(text, true);
       chatSuggestions.style.display = 'none';
-      const answer = faqData[text] ||
-        'ご質問ありがとうございます。詳細については直接お問い合わせください。\n👉 お問い合わせフォームへ';
-      botReply(answer);
+      await sendToAPI(text);
     }
 
-    function sendChatMessage() {
+    async function sendChatMessage() {
       const text = chatInput.value.trim();
-      if (!text) return;
+      if (!text || isSending) return;
       chatInput.value = '';
       addMessage(text, true);
       chatSuggestions.style.display = 'none';
-
-      // キーワードマッチング
-      const t = text;
-      let answer;
-      if (/サービス|何をして|業務/.test(t))        answer = faqData['どんなサービスがありますか？'];
-      else if (/料金|費用|いくら|値段/.test(t))     answer = faqData['料金・費用はいくらですか？'];
-      else if (/無料|初回|相談/.test(t))            answer = faqData['初回相談は無料ですか？'];
-      else if (/自動|[Rr][Pp][Aa]|効率|クラウド|AI/.test(t)) answer = faqData['AI・自動化による業務効率化支援とは？'];
-      else if (/予約|面談|アポ|会いたい/.test(t))   answer = faqData['面談の予約をしたい'];
-      else answer = 'ご質問ありがとうございます。\n恐れ入りますが、詳しくはお問い合わせフォームよりご連絡ください。';
-      botReply(answer);
+      await sendToAPI(text);
     }
 
     function handleChatKey(e) {

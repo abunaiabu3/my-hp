@@ -1,0 +1,11 @@
+{
+  "name": "my-hp",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "@anthropic-ai/sdk": "^0.52.0"
+  }
+}
