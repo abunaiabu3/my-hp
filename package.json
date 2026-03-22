@@ -1,8 +1,7 @@
 {
   "name": "my-hp",
-  "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "dev": "node server.js"
   },
   "dependencies": {
     "express": "^5.1.0",
