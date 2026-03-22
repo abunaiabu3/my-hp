@@ -1985,7 +1985,7 @@
       if (el) el.remove();
     }
 
-    // Claude API（/api/chat）へSSEストリーミングで送信
+    // Claude API（/api/chat）へJSON形式で送信
     async function sendToAPI(userText) {
       if (isSending) return;
       isSending = true;
@@ -2009,52 +2009,22 @@
           return;
         }
 
-        const bubble = addStreamingBotMessage();
-        let fullText = '';
+        const data = await res.json();
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop(); // 最後の不完全な行をバッファに残す
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') break;
-
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.error) {
-                bubble.innerHTML = parsed.error.replace(/\n/g, '<br>');
-                fullText = parsed.error;
-                break;
-              }
-              if (parsed.text) {
-                fullText += parsed.text;
-                bubble.innerHTML = fullText.replace(/\n/g, '<br>');
-                chatBody.scrollTop = chatBody.scrollHeight;
-              }
-            } catch {
-              // JSON解析エラーは無視
-            }
-          }
+        if (data.error) {
+          addMessage(data.error, false);
+          chatMessages.pop();
+          return;
         }
 
-        // 完成したAI応答を履歴に追加
-        if (fullText) {
-          chatMessages.push({ role: 'assistant', content: fullText });
-        }
+        // AI応答を表示して履歴に追加
+        addMessage(data.text, false);
+        chatMessages.push({ role: 'assistant', content: data.text });
+        chatBody.scrollTop = chatBody.scrollHeight;
 
       } catch (err) {
         hideTyping();
-        addMessage('通信エラーが発生しました。サーバーが起動しているか確認してください。', false);
+        addMessage('通信エラーが発生しました。しばらくしてから再度お試しください。', false);
         chatMessages.pop();
       } finally {
         isSending = false;
